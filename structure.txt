@@ -1,0 +1,23 @@
+banking-system/
+├── account-service/
+│   ├── main.py
+│   ├── requirements.txt
+│   └── Dockerfile
+├── transaction-service/
+│   ├── main.py
+│   ├── requirements.txt
+│   └── Dockerfile
+├── user-service/
+│   ├── main.py
+│   ├── requirements.txt
+│   └── Dockerfile
+├── notification-service/
+│   ├── main.py
+│   ├── requirements.txt
+│   └── Dockerfile
+├── api-gateway/
+│   ├── main.py
+│   ├── requirements.txt
+│   └── Dockerfile
+├── docker-compose.yml
+└── README.md
