@@ -1,0 +1,206 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: banking-system
+---
+# Oracle Database (for demo - in production use managed service or StatefulSet)
+apiVersion: v1
+kind: Service
+metadata:
+  name: oracle-db
+  namespace: banking-system
+  labels:
+    app: oracle-db
+spec:
+  ports:
+    - port: 1521
+      targetPort: 1521
+  selector:
+    app: oracle-db
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oracle-db
+  namespace: banking-system
+  labels:
+    app: oracle-db
+spec:
+  containers:
+    - name: oracle-db
+      image: gvenzl/oracle-xe:21-slim
+      env:
+        - name: ORACLE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: oracle-secrets
+              key: password
+        - name: APP_USER
+          value: bankuser
+        - name: APP_USER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: oracle-secrets
+              key: userpassword
+        - name: APP_DATASET
+          value: bankdb
+      ports:
+        - containerPort: 1521
+      volumeMounts:
+        - name: oracle-storage
+          mountPath: /opt/oracle/oradata
+  volumes:
+    - name: oracle-storage
+      emptyDir: {}
+---
+# Secrets (in real system, use proper secret management)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oracle-secrets
+  namespace: banking-system
+type: Opaque
+data:
+  password: cGFzc3dvcmQ=  # base64 encoded "password"
+  userpassword: YmFua3Bhc3M=  # base64 encoded "bankpass"
+---
+# Common labels for all services
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: banking-system
+  labels:
+    app: user-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      containers:
+        - name: user-service
+          image: docker.io/banking-user-service:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DATABASE_URL
+              value: "oracle+cx_oracle://bankuser:bankpass@oracle-db.banking-system.svc.cluster.local:1521/bankdb"
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: secret-key
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: banking-system
+spec:
+  selector:
+    app: user-service
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
+---
+# Repeat similar deployments for other services (account, transaction, notification, api-gateway)
+# For brevity, showing only user-service template above
+---
+# API Gateway (exposed externally)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: banking-system
+  labels:
+    app: api-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+        - name: api-gateway
+          image: docker.io/banking-api-gateway:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: USER_SERVICE_URL
+              value: "http://user-service.banking-system.svc.cluster.local:8000"
+            - name: ACCOUNT_SERVICE_URL
+              value: "http://account-service.banking-system.svc.cluster.local:8000"
+            - name: TRANSACTION_SERVICE_URL
+              value: "http://transaction-service.banking-system.svc.cluster.local:8000"
+            - name: NOTIFICATION_SERVICE_URL
+              value: "http://notification-service.banking-system.svc.cluster.local:8000"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: banking-system
+spec:
+  selector:
+    app: api-gateway
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
+  type: LoadBalancer
+---
+# Horizontal Pod Autoscaler for user-service (example)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: user-service-hpa
+  namespace: banking-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: user-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

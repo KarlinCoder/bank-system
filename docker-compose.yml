@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  # Oracle Database (using oracle-xe image)
+  oracle-db:
+    image: gvenzl/oracle-xe:21-slim
+    container_name: oracle-db
+    environment:
+      - ORACLE_PASSWORD=password
+      - APP_USER=bankuser
+      - APP_USER_PASSWORD=bankpass
+      - APP_DATASET=bankdb
+    ports:
+      - "1521:1521"
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD", "sqlplus", "-s", "sys/password@//localhost:1521/XEPDB1", "SELECT 1 FROM DUAL"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # User Service
+  user-service:
+    build: ./user-service
+    container_name: user-service
+    ports:
+      - "8001:8000"
+    environment:
+      - DATABASE_URL=oracle+cx_oracle://bankuser:bankpass@oracle-db:1521/bankdb
+      - SECRET_KEY=your-secret-key-here
+    depends_on:
+      oracle-db:
+        condition: service_healthy
+
+  # Account Service
+  account-service:
+    build: ./account-service
+    container_name: account-service
+    ports:
+      - "8002:8000"
+    environment:
+      - DATABASE_URL=oracle+cx_oracle://bankuser:bankpass@oracle-db:1521/bankdb
+    depends_on:
+      oracle-db:
+        condition: service_healthy
+
+  # Transaction Service
+  transaction-service:
+    build: ./transaction-service
+    container_name: transaction-service
+    ports:
+      - "8003:8000"
+    environment:
+      - DATABASE_URL=oracle+cx_oracle://bankuser:bankpass@oracle-db:1521/bankdb
+    depends_on:
+      oracle-db:
+        condition: service_healthy
+      account-service:
+        condition: service_started
+
+  # Notification Service
+  notification-service:
+    build: ./notification-service
+    container_name: notification-service
+    ports:
+      - "8004:8000"
+    environment:
+      - DATABASE_URL=oracle+cx_oracle://bankuser:bankpass@oracle-db:1521/bankdb
+    depends_on:
+      oracle-db:
+        condition: service_healthy
+
+  # API Gateway
+  api-gateway:
+    build: ./api-gateway
+    container_name: api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - USER_SERVICE_URL=http://user-service:8000
+      - ACCOUNT_SERVICE_URL=http://account-service:8000
+      - TRANSACTION_SERVICE_URL=http://transaction-service:8000
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8000
+    depends_on:
+      - user-service
+      - account-service
+      - transaction-service
+      - notification-service
+
+volumes:
+  oracle-data:
